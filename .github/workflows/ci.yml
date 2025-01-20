@@ -1,32 +1,90 @@
-name: Java CI with Gradle
+name: Java CI/CD Pipeline
 
 on:
   push:
-    branches:
-      - master
+    branches: [ master ]
+    tags: [ 'v*' ]
   pull_request:
-    branches:
-      - master
+    branches: [ master ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
-      - name: Set up JDK 22
-        uses: actions/setup-java@v2
+      - name: Set up JDK
+        uses: actions/setup-java@v3
         with:
           java-version: '22'
           distribution: 'temurin'
+          cache: gradle
 
-      - name: Set up Gradle
-        uses: gradle/wrapper-validation-action@v1
+      - name: Set Version
+        id: version
+        run: |
+          VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Build with Gradle
-        run: ./gradlew build
+      - name: Build
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: build
 
-      - name: Run tests
-        run: ./gradlew test
+      - name: Cache Gradle
+        uses: actions/cache@v3
+        with:
+          path: ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: build/reports/tests
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-artifact
+          path: build/libs
+
+  deploy-qa:
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: qa
+    steps:
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: build-artifact
+
+      - name: Deploy to QA
+        run: |
+          echo "Deploying version ${needs.build.outputs.version} to QA"
+          # Add your QA deployment commands here
+
+  deploy-prod:
+    needs: [build, deploy-qa]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: prod
+    steps:
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: build-artifact
+
+      - name: Deploy to Production
+        run: |
+          echo "Deploying version ${needs.build.outputs.version} to Production"
+          # Add your Production deployment commands here
